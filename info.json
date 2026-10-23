@@ -1,9 +1,9 @@
 {
   "identifier": "com.local.hy-mt2-mlx",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "category": "translate",
   "name": "Hy-MT2",
-  "summary": "通过本机懒启动管理器调用 MLX Hy-MT2；模型按需启动，空闲后自动退出。",
+  "summary": "通过本机懒启动管理器调用 MLX Hy-MT2；支持流式输出与自动回退。",
   "icon": "001",
   "author": "Local",
   "homepage": "https://github.com/Tencent-Hunyuan/Hy-MT2",
@@ -35,7 +35,7 @@
           "value": "false"
         }
       ],
-      "desc": "开启后优先流式输出；若上游流式未返回可用正文，插件会自动回退一次非流式请求。Bob 1.8.0+ 支持流式输出；不支持时自动使用非流式请求。"
+      "desc": "默认开启流式输出；Bob 支持流式 API 且本地后端返回 SSE 时逐步显示译文。若流式请求失败或没有可用译文，自动回退一次非流式请求。"
     },
     {
       "identifier": "customPrompt",
