@@ -1,0 +1,99 @@
+{
+  "identifier": "com.local.hy-mt2-mlx",
+  "version": "0.2.4",
+  "category": "translate",
+  "name": "Hy-MT2",
+  "summary": "通过本机懒启动管理器调用 MLX Hy-MT2；模型按需启动，空闲后自动退出。",
+  "icon": "001",
+  "author": "Local",
+  "homepage": "https://github.com/Tencent-Hunyuan/Hy-MT2",
+  "minBobVersion": "0.0.1",
+  "options": [
+    {
+      "identifier": "apiUrl",
+      "type": "text",
+      "title": "本地 API 地址",
+      "defaultValue": "http://127.0.0.1:8899/v1/chat/completions",
+      "desc": "本地 mlx_lm.server 的 Chat Completions 地址。默认只连接本机 127.0.0.1，不需要第三方翻译 API。",
+      "textConfig": {
+        "type": "visible",
+        "placeholderText": "http://127.0.0.1:8899/v1/chat/completions"
+      }
+    },
+    {
+      "identifier": "streamOutput",
+      "type": "menu",
+      "title": "流式输出",
+      "defaultValue": "true",
+      "menuValues": [
+        {
+          "title": "开启",
+          "value": "true"
+        },
+        {
+          "title": "关闭",
+          "value": "false"
+        }
+      ],
+      "desc": "开启后优先流式输出；若上游流式未返回可用正文，插件会自动回退一次非流式请求。Bob 1.8.0+ 支持流式输出；不支持时自动使用非流式请求。"
+    },
+    {
+      "identifier": "customPrompt",
+      "type": "text",
+      "title": "提示词",
+      "defaultValue": "",
+      "desc": "留空时使用默认翻译指令。填写后将以此提示词替代默认指令；翻译风格在下方「翻译风格」单独设置。原文会自动附加在提示词后。",
+      "textConfig": {
+        "type": "visible",
+        "height": 160,
+        "placeholderText": "请将以下文本翻译为 {target_lang}。"
+      }
+    },
+    {
+      "identifier": "translationStyle",
+      "type": "text",
+      "title": "翻译风格",
+      "defaultValue": "",
+      "desc": "留空时使用默认翻译风格。填写后将以此风格代替默认风格，例如：学术论文严谨风格、日常口语化风格、科普语气、商业正式语气、新闻报道风格、宣传文案风格、小说风格、法律合同风格、中国古代文言文等。",
+      "textConfig": {
+        "type": "visible",
+        "placeholderText": ""
+      }
+    },
+    {
+      "identifier": "temperature",
+      "type": "text",
+      "title": "Temperature（随机性）",
+      "defaultValue": "0.7",
+      "desc": "腾讯官方推荐：Hy-MT2-1.8B / 7B = 0.7；Hy-MT2-30B-A3B = 0.7。三种规格的官方推荐值相同。数值越高，输出随机性通常越强。 如果偶尔出现重复或不稳定输出，可测试 0.2–0.3 来降低随机性；这是稳定性排查建议，不是腾讯官方推荐值，官方默认推荐仍为 0.7。"
+    },
+    {
+      "identifier": "topP",
+      "type": "text",
+      "title": "Top P（核采样）",
+      "defaultValue": "0.6",
+      "desc": "腾讯官方推荐：Hy-MT2-1.8B / 7B = 0.6；Hy-MT2-30B-A3B = 1.0。更换模型规格后，请按对应值调整。"
+    },
+    {
+      "identifier": "topK",
+      "type": "text",
+      "title": "Top K（候选词数量）",
+      "defaultValue": "20",
+      "desc": "腾讯官方推荐：Hy-MT2-1.8B / 7B = 20；Hy-MT2-30B-A3B = -1（官方设置表示关闭 Top-K 筛选）。注意：切换到 30B-A3B 时，请确认当前 MLX-LM 版本对 top_k=-1 的兼容性。"
+    },
+    {
+      "identifier": "repetitionPenalty",
+      "type": "text",
+      "title": "Repetition Penalty（重复惩罚）",
+      "defaultValue": "1.05",
+      "desc": "腾讯官方推荐：Hy-MT2-1.8B / 7B = 1.05；Hy-MT2-30B-A3B = 1.0。1.0 表示不额外施加重复惩罚。"
+    },
+    {
+      "identifier": "maxTokens",
+      "type": "text",
+      "title": "Max Tokens（最大输出长度）",
+      "defaultValue": "4096",
+      "desc": "腾讯官方推荐：Hy-MT2-1.8B / 7B / 30B-A3B 均为 4096。它是单次输出上限，不代表一定生成这么多 token。Hy-MT2 官方上下文长度为 8192，输入文本也会占用上下文。 对于短文本翻译，降低上限（例如 512–1024）也可限制异常长输出；如翻译长文则按需要调高。"
+    }
+  ]
+}

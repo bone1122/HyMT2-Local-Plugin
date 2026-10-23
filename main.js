@@ -1,0 +1,345 @@
+/*
+ * Bob translation plugin: local MLX Hy-MT2 via OpenAI-compatible endpoint.
+ * This plugin sends requests only to the configured local endpoint by default.
+ * Official Hy-MT2 parameter recommendations are documented in info.json option descriptions.
+ */
+
+function supportLanguages() {
+    return [
+        "auto", "zh-Hans", "zh-Hant", "yue", "en", "fr", "pt", "es",
+        "ja", "tr", "ru", "ar", "ko", "th", "it", "de", "vi", "ms",
+        "id", "tl", "hi", "pl", "cs", "nl", "km", "my", "fa", "gu",
+        "ur", "te", "mr", "he", "bn", "ta", "uk", "bo", "kk", "mn", "ug"
+    ];
+}
+
+function languageName(code) {
+    // Hy-MT2's official prompt examples recommend full language names.
+    var names = {
+        "auto": "automatic language detection",
+        "zh-Hans": "Simplified Chinese",
+        "zh-Hant": "Traditional Chinese",
+        "yue": "Cantonese",
+        "en": "English",
+        "fr": "French",
+        "pt": "Portuguese",
+        "es": "Spanish",
+        "ja": "Japanese",
+        "tr": "Turkish",
+        "ru": "Russian",
+        "ar": "Arabic",
+        "ko": "Korean",
+        "th": "Thai",
+        "it": "Italian",
+        "de": "German",
+        "vi": "Vietnamese",
+        "ms": "Malay",
+        "id": "Indonesian",
+        "tl": "Filipino",
+        "hi": "Hindi",
+        "pl": "Polish",
+        "cs": "Czech",
+        "nl": "Dutch",
+        "km": "Khmer",
+        "my": "Burmese",
+        "fa": "Persian",
+        "gu": "Gujarati",
+        "ur": "Urdu",
+        "te": "Telugu",
+        "mr": "Marathi",
+        "he": "Hebrew",
+        "bn": "Bengali",
+        "ta": "Tamil",
+        "uk": "Ukrainian",
+        "bo": "Tibetan",
+        "kk": "Kazakh",
+        "mn": "Mongolian",
+        "ug": "Uyghur"
+    };
+    return names[code] || code || "automatic language detection";
+}
+
+function complete(query, completion, payload) {
+    if (query && typeof query.onCompletion === "function") {
+        query.onCompletion(payload);
+    } else if (typeof completion === "function") {
+        completion(payload);
+    }
+}
+
+function readNumber(value, fallback) {
+    var number = Number(value);
+    return isFinite(number) ? number : fallback;
+}
+
+function translate(query, completion) {
+    var text = (query && (query.originalText || query.text)) || "";
+    if (!text.trim()) {
+        complete(query, completion, {
+            error: { type: "param", message: "没有可翻译的文本。" }
+        });
+        return;
+    }
+
+    var apiUrl = ($option.apiUrl || "http://127.0.0.1:8899/v1/chat/completions").trim();
+    var temperature = readNumber($option.temperature, 0.7);
+    var topP = readNumber($option.topP, 0.6);
+    var topK = parseInt($option.topK || "20", 10);
+    var repetitionPenalty = readNumber($option.repetitionPenalty, 1.05);
+    var maxTokens = parseInt($option.maxTokens || "4096", 10);
+
+    if (!isFinite(topK)) topK = 20;
+    if (!isFinite(maxTokens) || maxTokens < 1) maxTokens = 4096;
+
+    var fromCode = (query.detectFrom && query.detectFrom !== "auto") ? query.detectFrom : query.from;
+    var toCode = (query.detectTo && query.detectTo !== "auto") ? query.detectTo : query.to;
+    var toName = languageName(toCode || "zh-Hans");
+
+    // 用户可在插件设置中填写提示词与翻译风格。提示词为空时使用默认翻译指令；
+    // 翻译风格为空时不添加额外风格要求。自定义提示词只支持 {target_lang} 占位符。
+    var defaultInstruction;
+    if (!toCode || toCode === "auto") {
+        defaultInstruction = "Translate the following text. Note that you should only output the translated result without any additional explanation:";
+    } else {
+        defaultInstruction = "Translate the following text into " + toName + ". Note that you should only output the translated result without any additional explanation:";
+    }
+
+    var customPrompt = (typeof $option.customPrompt === "string" ? $option.customPrompt : "").trim();
+    var translationStyle = (typeof $option.translationStyle === "string" ? $option.translationStyle : "").trim();
+    var instruction = customPrompt
+        ? customPrompt.replace(/\{target_lang\}/g, toName)
+        : defaultInstruction;
+    if (translationStyle) {
+        instruction += "\n\n翻译风格要求：" + translationStyle;
+    }
+
+    var baseBody = {
+        messages: [
+            {
+                role: "user",
+                content: instruction + "\n\n" + text.trim()
+            }
+        ],
+        temperature: temperature,
+        top_p: topP,
+        top_k: topK,
+        repetition_penalty: repetitionPenalty,
+        max_tokens: maxTokens
+    };
+
+    var fromResult = (fromCode && fromCode !== "auto") ? fromCode : (query.detectFrom || "auto");
+    var toResult = (toCode && toCode !== "auto") ? toCode : (query.detectTo || "zh-Hans");
+    var streamEnabled = String($option.streamOutput === undefined ? "true" : $option.streamOutput) === "true";
+    var finished = false;
+
+    function finishError(type, message) {
+        if (finished) return;
+        finished = true;
+        complete(query, completion, { error: { type: type, message: message } });
+    }
+
+    function finishText(value) {
+        if (finished) return;
+        var finalText = (typeof value === "string" ? value : "").trim();
+        if (!finalText) {
+            finishError("api", "本地模型没有返回译文。请检查模型服务日志和 API 地址。");
+            return;
+        }
+        var diagnosticLabel = "[Hy-MT2临时诊断] mode=" + streamDiag.mode +
+            "; streamHandler调用=" + streamDiag.streamHandlerCalls +
+            "; chunk.text字符数=" + streamDiag.chunkTextChars +
+            "; SSE data行=" + streamDiag.sseDataLines +
+            "; delta片段数=" + streamDiag.deltaPieces +
+            "; onStream调用=" + streamDiag.onStreamCalls +
+            "; fallback原因=" + (streamDiag.fallbackReason || "无") +
+            "; streamEnabled=" + streamEnabled +
+            "; streamRequest类型=" + typeof $http.streamRequest +
+            "; onStream类型=" + (query ? typeof query.onStream : "query缺失");
+        finalText = diagnosticLabel + "\n\n" + finalText;
+        finished = true;
+        var result = {
+            from: fromResult,
+            to: toResult,
+            content: { format: "plain", text: finalText },
+            toParagraphs: [finalText]
+        };
+        complete(query, completion, { result: result });
+    }
+
+    function handleNonStreamResponse(resp) {
+        if (resp.error) {
+            finishError("network", "无法连接本地 MLX 服务。请确认服务已启动，地址为 " + apiUrl + "。详情：" +
+                (resp.error.localizedDescription || resp.error.message || "未知网络错误"));
+            return;
+        }
+        var statusCode = resp.response && resp.response.statusCode;
+        var data = resp.data;
+        if (typeof data === "string") {
+            try { data = JSON.parse(data); } catch (e) {}
+        }
+        if (statusCode && statusCode >= 400) {
+            finishError("api", "本地 MLX 服务返回 HTTP " + statusCode +
+                (data && data.error && data.error.message ? ("：" + data.error.message) : ""));
+            return;
+        }
+        var translated = "";
+        try { translated = data.choices[0].message.content; } catch (e) {}
+        finishText(translated);
+    }
+
+    function sendNonStream() {
+        var body = {};
+        Object.keys(baseBody).forEach(function(key) { body[key] = baseBody[key]; });
+        body.stream = false;
+        $http.request({
+            method: "POST",
+            url: apiUrl,
+            header: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: body,
+            timeout: 600,
+            cancelSignal: query.cancelSignal,
+            handler: handleNonStreamResponse
+        });
+    }
+
+    var fallbackStarted = false;
+    var streamDiag = {mode:"INIT", fallbackReason:"", streamHandlerCalls:0, chunkTextChars:0, sseDataLines:0, deltaPieces:0, onStreamCalls:0};
+    function fallbackNonStreamOnce() {
+        if (fallbackStarted) return;
+        fallbackStarted = true;
+        streamDiag.fallbackReason = streamDiag.mode;
+        streamDiag.mode = "NON_STREAM_FALLBACK";
+        sendNonStream();
+    }
+
+    function emitStreamText(value) {
+        if (!value || !query || typeof query.onStream !== "function") return;
+        streamDiag.onStreamCalls += 1;
+        query.onStream({
+            result: {
+                from: fromResult,
+                to: toResult,
+                content: { format: "plain", text: value },
+                toParagraphs: [value]
+            }
+        });
+    }
+
+    if (!streamEnabled || typeof $http.streamRequest !== "function" || !query || typeof query.onStream !== "function") {
+        if (!streamEnabled) {
+            streamDiag.mode = "NON_STREAM_OPTION_OFF";
+        } else if (typeof $http.streamRequest !== "function") {
+            streamDiag.mode = "NON_STREAM_API_UNAVAILABLE";
+        } else {
+            streamDiag.mode = "NON_STREAM_CALLBACK_UNAVAILABLE";
+        }
+        sendNonStream();
+        return;
+    }
+
+    var streamBody = {};
+    Object.keys(baseBody).forEach(function(key) { streamBody[key] = baseBody[key]; });
+    streamBody.stream = true;
+    var sseBuffer = "";
+    var streamedText = "";
+    var streamHadError = false;
+
+    function parseSseLine(line) {
+        var trimmed = line.trim();
+        if (trimmed.indexOf("data:") === 0) {
+            console.log("[Hy-MT2诊断] 收到SSE data行，长度=" + trimmed.length);
+        }
+        if (!trimmed || trimmed.indexOf("data:") !== 0) return;
+        var dataText = trimmed.slice(5).trim();
+        if (!dataText || dataText === "[DONE]") return;
+        streamDiag.sseDataLines += 1;
+        var event;
+        try { event = JSON.parse(dataText); } catch (e) { return; }
+        if (event && event.error) {
+            streamHadError = true;
+            return;
+        }
+        var piece = "";
+        try { piece = event.choices[0].delta.content || ""; } catch (e) {}
+        if (typeof piece === "string" && piece.length) {
+            streamDiag.deltaPieces += 1;
+            streamedText += piece;
+            emitStreamText(streamedText);
+        }
+    }
+
+    try {
+        streamDiag.mode = "STREAM_REQUEST_STARTED";
+        $http.streamRequest({
+            method: "POST",
+            url: apiUrl,
+            header: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+            body: streamBody,
+            timeout: 600,
+            cancelSignal: query.cancelSignal,
+            streamHandler: function(chunk) {
+                streamDiag.streamHandlerCalls += 1;
+                console.log("[Hy-MT2诊断] streamHandler触发，chunk类型=" +
+                    typeof chunk + "，字段=" +
+                    (chunk && typeof chunk === "object" ? Object.keys(chunk).join(",") : "无"));
+                var incoming = (chunk && typeof chunk.text === "string") ? chunk.text : "";
+                streamDiag.chunkTextChars += incoming.length;
+                console.log("[Hy-MT2诊断] chunk.text长度=" + incoming.length);
+                if (!incoming) return;
+                sseBuffer += incoming.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+                var lines = sseBuffer.split("\n");
+                sseBuffer = lines.pop() || "";
+                for (var i = 0; i < lines.length; i++) parseSseLine(lines[i]);
+            },
+            handler: function(resp) {
+                console.log("[Hy-MT2诊断] 流式请求结束，累计文本长度=" +
+                    streamedText.length + "，是否有错误=" + streamHadError +
+                    "，响应字段=" +
+                    (resp && typeof resp === "object" ? Object.keys(resp).join(",") : "无"));
+                if (sseBuffer) parseSseLine(sseBuffer);
+                var statusCode = resp && resp.response && resp.response.statusCode;
+                if (resp && resp.error || (statusCode && statusCode >= 400) || streamHadError || !streamedText.trim()) {
+                    streamDiag.mode = "STREAM_FAILED_OR_EMPTY";
+                    // Exactly one fallback attempt, and only if the stream supplied no
+                    // usable translation (or the stream endpoint reported an error).
+                    fallbackNonStreamOnce();
+                    return;
+                }
+                streamDiag.mode = "STREAM_COMPLETED";
+                finishText(streamedText);
+            }
+        });
+    } catch (e) {
+        // Some older Bob builds may expose no working streaming API.
+        fallbackNonStreamOnce();
+    }
+
+}
+
+function pluginTimeoutInterval() {
+    return 600;
+}
+
+function pluginValidate(completion) {
+    var apiUrl = ($option.apiUrl || "http://127.0.0.1:8899/v1/chat/completions").trim();
+    var baseUrl = apiUrl.replace(/\/chat\/completions\/?$/, "/models");
+    $http.request({
+        method: "GET",
+        url: baseUrl,
+        timeout: 10,
+        handler: function(resp) {
+            if (resp.error || (resp.response && resp.response.statusCode >= 400)) {
+                completion({
+                    result: false,
+                    error: {
+                        type: "network",
+                        message: "无法访问本地 MLX 服务，请确认懒启动管理器已安装并在后台运行。",
+                        troubleshootingLink: "https://huggingface.co/Sube126/Hy-MT2-1.8B-1.25Bit-MLX"
+                    }
+                });
+                return;
+            }
+            completion({ result: true });
+        }
+    });
+}
