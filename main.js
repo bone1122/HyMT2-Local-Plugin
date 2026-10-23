@@ -145,17 +145,6 @@ function translate(query, completion) {
             finishError("api", "本地模型没有返回译文。请检查模型服务日志和 API 地址。");
             return;
         }
-        var diagnosticLabel = "[Hy-MT2临时诊断] mode=" + streamDiag.mode +
-            "; streamHandler调用=" + streamDiag.streamHandlerCalls +
-            "; chunk.text字符数=" + streamDiag.chunkTextChars +
-            "; SSE data行=" + streamDiag.sseDataLines +
-            "; delta片段数=" + streamDiag.deltaPieces +
-            "; onStream调用=" + streamDiag.onStreamCalls +
-            "; fallback原因=" + (streamDiag.fallbackReason || "无") +
-            "; streamEnabled=" + streamEnabled +
-            "; streamRequest类型=" + typeof $http.streamRequest +
-            "; onStream类型=" + (query ? typeof query.onStream : "query缺失");
-        finalText = diagnosticLabel + "\n\n" + finalText;
         finished = true;
         var result = {
             from: fromResult,
@@ -203,18 +192,14 @@ function translate(query, completion) {
     }
 
     var fallbackStarted = false;
-    var streamDiag = {mode:"INIT", fallbackReason:"", streamHandlerCalls:0, chunkTextChars:0, sseDataLines:0, deltaPieces:0, onStreamCalls:0};
     function fallbackNonStreamOnce() {
         if (fallbackStarted) return;
         fallbackStarted = true;
-        streamDiag.fallbackReason = streamDiag.mode;
-        streamDiag.mode = "NON_STREAM_FALLBACK";
         sendNonStream();
     }
 
     function emitStreamText(value) {
         if (!value || !query || typeof query.onStream !== "function") return;
-        streamDiag.onStreamCalls += 1;
         query.onStream({
             result: {
                 from: fromResult,
@@ -226,13 +211,6 @@ function translate(query, completion) {
     }
 
     if (!streamEnabled || typeof $http.streamRequest !== "function" || !query || typeof query.onStream !== "function") {
-        if (!streamEnabled) {
-            streamDiag.mode = "NON_STREAM_OPTION_OFF";
-        } else if (typeof $http.streamRequest !== "function") {
-            streamDiag.mode = "NON_STREAM_API_UNAVAILABLE";
-        } else {
-            streamDiag.mode = "NON_STREAM_CALLBACK_UNAVAILABLE";
-        }
         sendNonStream();
         return;
     }
@@ -246,13 +224,9 @@ function translate(query, completion) {
 
     function parseSseLine(line) {
         var trimmed = line.trim();
-        if (trimmed.indexOf("data:") === 0) {
-            console.log("[Hy-MT2诊断] 收到SSE data行，长度=" + trimmed.length);
-        }
         if (!trimmed || trimmed.indexOf("data:") !== 0) return;
         var dataText = trimmed.slice(5).trim();
         if (!dataText || dataText === "[DONE]") return;
-        streamDiag.sseDataLines += 1;
         var event;
         try { event = JSON.parse(dataText); } catch (e) { return; }
         if (event && event.error) {
@@ -262,14 +236,12 @@ function translate(query, completion) {
         var piece = "";
         try { piece = event.choices[0].delta.content || ""; } catch (e) {}
         if (typeof piece === "string" && piece.length) {
-            streamDiag.deltaPieces += 1;
             streamedText += piece;
             emitStreamText(streamedText);
         }
     }
 
     try {
-        streamDiag.mode = "STREAM_REQUEST_STARTED";
         $http.streamRequest({
             method: "POST",
             url: apiUrl,
@@ -278,13 +250,7 @@ function translate(query, completion) {
             timeout: 600,
             cancelSignal: query.cancelSignal,
             streamHandler: function(chunk) {
-                streamDiag.streamHandlerCalls += 1;
-                console.log("[Hy-MT2诊断] streamHandler触发，chunk类型=" +
-                    typeof chunk + "，字段=" +
-                    (chunk && typeof chunk === "object" ? Object.keys(chunk).join(",") : "无"));
                 var incoming = (chunk && typeof chunk.text === "string") ? chunk.text : "";
-                streamDiag.chunkTextChars += incoming.length;
-                console.log("[Hy-MT2诊断] chunk.text长度=" + incoming.length);
                 if (!incoming) return;
                 sseBuffer += incoming.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
                 var lines = sseBuffer.split("\n");
@@ -292,20 +258,14 @@ function translate(query, completion) {
                 for (var i = 0; i < lines.length; i++) parseSseLine(lines[i]);
             },
             handler: function(resp) {
-                console.log("[Hy-MT2诊断] 流式请求结束，累计文本长度=" +
-                    streamedText.length + "，是否有错误=" + streamHadError +
-                    "，响应字段=" +
-                    (resp && typeof resp === "object" ? Object.keys(resp).join(",") : "无"));
                 if (sseBuffer) parseSseLine(sseBuffer);
                 var statusCode = resp && resp.response && resp.response.statusCode;
                 if (resp && resp.error || (statusCode && statusCode >= 400) || streamHadError || !streamedText.trim()) {
-                    streamDiag.mode = "STREAM_FAILED_OR_EMPTY";
                     // Exactly one fallback attempt, and only if the stream supplied no
                     // usable translation (or the stream endpoint reported an error).
                     fallbackNonStreamOnce();
                     return;
                 }
-                streamDiag.mode = "STREAM_COMPLETED";
                 finishText(streamedText);
             }
         });
